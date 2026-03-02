@@ -20,6 +20,16 @@ BANDS = (
     ('70m', 430000, 440000),
 )
 
+# Define a template for ADIF format
+ADIF_HEADER = """\
+ADIF Export from WSJT-X ALL.TXT
+<EOH>
+"""
+
+ADIF_QSO_TEMPLATE = """\
+<CALL:{call_len}>{call}<BAND:{band_len}>{band}<FREQ:{freq_len}>{freq}<MODE:{mode_len}>{mode}<QSO_DATE:{qso_date_len}>{qso_date}<TIME_ON:{time_on_len}>{time_on}<RST_SENT:{rst_len}>{rst_sent}<RST_RCVD:{rst_len}>{rst_rcvd}<MY_GRIDSQUARE:{my_grid_len}>{my_grid}<GRIDSQUARE:{grid_len}>{grid}<EOR>
+"""
+
 # Function to get band based on frequency
 def get_band(frequency):
     for band in BANDS:
