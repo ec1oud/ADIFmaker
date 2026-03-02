@@ -1,7 +1,11 @@
-# ADIFmaker
-A Python script to convert a WSJT-X ALL.TXT file into an ADI file.
+# wsjtx-all2adif
+A vibe-coded Python script to convert a WSJT-X ALL.TXT file into an ADI QSO log.
+It's useful if you lost your ADI log somehow, or are using a buggy version of
+some fork (like Decodium) that doesn't output a log but still outputs the ALL.TXT file.
 
-Originally written by ChatGPT, based on the following prompt:
+Originally written by ChatGPT and fixed up later with Qwen 3.5.
+
+The original author claimed that the original prompt was:
 
 Please write me a python script to read a WSJT-X ALL.TXT file and output an ADIF log file of valid QSOs.
 If necessary, please highlight what I need to change depending on whether the file is PC or Unix format.  
@@ -64,6 +68,4 @@ BANDS = (
   ('2m',144000,146000),
   ('70m',430000,440000) )
 ```
-
-Since then it has been updated further.
 
