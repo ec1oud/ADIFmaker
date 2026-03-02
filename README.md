@@ -1,9 +1,9 @@
 # ADIFmaker
 A Python script to convert a WSJT-X ALL.TXT file into an ADI file.
 
-## This script was written by ChatGPT, based on the following input from me:
+Originally written by ChatGPT, based on the following prompt:
 
-Please write me a python script to read aWSJT-X ALL.TXT file and output an ADIF log file of valid QSOs.
+Please write me a python script to read a WSJT-X ALL.TXT file and output an ADIF log file of valid QSOs.
 If necessary, please highlight what I need to change depending on whether the file is PC or Unix format.  
 
 I imagine a regex will be required on the lines of the input file. I can't understand regex, but the format should be:
@@ -30,7 +30,7 @@ What I mean by "count the lines which 'contribute' to a log" is that we can't co
 > <Recipient> <Sender> RR73
 > <Recipient> <Sender> 73
 
-But don't forget that the recipient and sender migth swap places. A complete conversation might go:
+But don't forget that the recipient and sender might swap places. A complete conversation might go:
 
 > CQ FRED MYLOCATION (I'm Fred, I want to talk to someone, I'm at MYLOCATION) 
 > FRED GEORGE GEORGES_LOCATION (Hi, Fred, I'm George, I'm at GEORGES_LOCATION)
@@ -65,5 +65,5 @@ BANDS = (
   ('70m',430000,440000) )
 ```
 
-The previous version found about 3,000 SQOs in my 20,000 line file, where there were really only about 50 valid logs. The most recent version did not find any QSOs.
+Since then it has been updated further.
 

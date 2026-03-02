@@ -1,8 +1,10 @@
+#!/usr/bin/env python3
+import argparse
 import re
+import sys
 from datetime import datetime
 
 # Constants
-MyCall = "M0ABC"  # Your callsign
 BANDS = (
     ('160m', 1810, 2000),
     ('80m', 3500, 3800),
@@ -45,7 +47,7 @@ def parse_message(message):
 
     sender = parts[0]
     recipient = parts[1] if len(parts) > 1 else ""
-    
+
     # Determine if this is a 73 or RR73 message
     if "73" in message:
         qso_complete = True
@@ -60,19 +62,19 @@ def parse_message(message):
     }
 
 # Function to extract and parse lines from ALL.TXT that are valid QSOs
-def parse_wsjtx_log(file_path):
+def parse_wsjtx_log(file_path, my_call):
     qso_data = []
     ongoing_qsos = {}  # To track ongoing exchanges by recipient
     valid_qso_count = 0
     non_contributing_count = 0
     invalid_lines_count = 0
-    
+
     with open(file_path, 'r') as f:
         lines = f.readlines()
 
         # Pattern to match QSO lines in the ALL.TXT file
         qso_pattern = re.compile(r"(\d{6})_(\d{6})\s+([\d.]+)\s+(Rx|Tx)\s+(\w+)\s+(-?\d+)\s+(-?\d+\.\d+)\s+(\d+)\s+(.*)")
-        
+
         for line in lines:
             match = qso_pattern.match(line.strip())
             if match:
@@ -89,11 +91,11 @@ def parse_wsjtx_log(file_path):
                 recipient = parsed_msg['recipient']
                 qso_complete = parsed_msg['qso_complete']
 
-                if MyCall in message:
-                    if sender == MyCall or recipient == MyCall:
-                        # Track conversation between MyCall and other station
-                        other_station = recipient if sender == MyCall else sender
-                        
+                if my_call in message:
+                    if sender == my_call or recipient == my_call:
+                        # Track conversation between my_call and other station
+                        other_station = recipient if sender == my_call else sender
+
                         if qso_complete:
                             # Log valid QSO if we have a complete message
                             qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
@@ -128,7 +130,12 @@ def parse_wsjtx_log(file_path):
     return qso_data, valid_qso_count, non_contributing_count, invalid_lines_count
 
 # Function to write the ADIF file
-def write_adif(qso_data, output_file):
+def write_adif(qso_data, output_file, my_call):
+    global ADIF_HEADER
+    ADIF_HEADER = f"""\
+ADIF Export from WSJT-X ALL.TXT for {my_call}
+<EOH>
+"""
     with open(output_file, 'w') as adif_file:
         adif_file.write(ADIF_HEADER)
 
@@ -146,15 +153,60 @@ def write_adif(qso_data, output_file):
             )
             adif_file.write(adif_qso)
 
+# Function to validate callsign format
+def validate_callsign(callsign):
+    # Basic amateur radio callsign regex pattern
+    pattern = r'^[A-Z]{1,2}[0-9][A-Z]{0,2}(\/[A-Z0-9]{1,3})?$'
+    if not re.match(pattern, callsign.upper()):
+        print(f"Error: Invalid callsign format '{callsign}'")
+        print("Expected format: 2-5 alphanumeric characters, starting with letters, containing a digit")
+        print("Examples: K1ABC, WA1XYZ, VE2K")
+        sys.exit(1)
+    return callsign.upper()
+
 # Main logic to parse the ALL.TXT and write to ADIF
 def main():
-    input_file = 'ALL.TXT'  # Replace with the path to your WSJT-X ALL.TXT log file
-    output_file = 'output_log.adi'  # Output ADIF file
-    
-    qso_data, valid_qso_count, non_contributing_count, invalid_lines_count = parse_wsjtx_log(input_file)
-    write_adif(qso_data, output_file)
-    
-    print(f"ADIF log written to {output_file}")
+    parser = argparse.ArgumentParser(
+        description='Convert WSJT-X ALL.TXT log file to ADIF format',
+        epilog='Required arguments:\n'
+               '  callsign      Your amateur radio callsign (e.g., K1ABC, WA1XYZ)\n'
+               '  all_txt_path  Path to WSJT-X ALL.TXT log file',
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+
+    parser.add_argument(
+        'callsign',
+        help='Your amateur radio callsign (required)'
+    )
+
+    parser.add_argument(
+        'all_txt_path',
+        help='Path to WSJT-X ALL.TXT log file (required)'
+    )
+
+    parser.add_argument(
+        '-o', '--output',
+        default='output_log.adi',
+        help='Output ADIF file name (default: output_log.adi)'
+    )
+
+    args = parser.parse_args()
+
+    # Validate callsign
+    my_call = validate_callsign(args.callsign)
+
+    # Check if ALL.TXT file exists
+    import os
+    if not os.path.exists(args.all_txt_path):
+        print(f"Error: ALL.TXT file not found at '{args.all_txt_path}'")
+        sys.exit(1)
+
+    qso_data, valid_qso_count, non_contributing_count, invalid_lines_count = \
+        parse_wsjtx_log(args.all_txt_path, my_call)
+
+    write_adif(qso_data, args.output, my_call)
+
+    print(f"ADIF log written to {args.output}")
     print(f"Valid QSOs logged: {valid_qso_count}")
     print(f"Non-contributing lines: {non_contributing_count}")
     print(f"Invalid lines (not matching regex): {invalid_lines_count}")
