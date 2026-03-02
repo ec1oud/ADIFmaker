@@ -39,7 +39,7 @@ def get_band(frequency):
             return band[0]
     return "unknown"
 
-# Function to parse a QSO message and return a dictionary with details
+# Function to parse a QSO message and extract report if present
 def parse_message(message):
     parts = message.split()
     if len(parts) < 2:
@@ -48,23 +48,31 @@ def parse_message(message):
     sender = parts[0]
     recipient = parts[1] if len(parts) > 1 else ""
 
-    # Determine if this is a 73 or RR73 message
-    if "73" in message:
-        qso_complete = True
-    else:
-        qso_complete = False
+    # Look for a report (3-5 characters, typically like 599, 59, -12, etc.)
+    report = None
+    for part in parts[1:]:
+        # Check if it looks like an RST report (numeric, with optional negative sign)
+        if re.match(r'^-?\d{2,4}$', part):
+            report = part
+            break
+
+    # Check for 73 or RR73
+    has_73 = "73" in message or "RR73" in message
 
     return {
         'sender': sender,
         'recipient': recipient,
-        'qso_complete': qso_complete,
+        'has_report': report is not None,
+        'report': report,
+        'has_73': has_73,
         'message': message
     }
 
 # Function to extract and parse lines from ALL.TXT that are valid QSOs
 def parse_wsjtx_log(file_path, my_call):
     qso_data = []
-    ongoing_qsos = {}  # To track ongoing exchanges by recipient
+    # Track QSO states: {callsign: {'state': 'heard'|'replied'|'complete', 'report': str, 'datetime': str, 'time': str, 'freq': str, 'band': str, 'mode': str}}
+    qso_states = {}
     valid_qso_count = 0
     non_contributing_count = 0
     invalid_lines_count = 0
@@ -81,7 +89,7 @@ def parse_wsjtx_log(file_path, my_call):
                 date_str, time_str, freq_mhz, direction, mode, rst_rcvd, _, _, message = match.groups()
                 frequency = float(freq_mhz)
 
-                # Parse the message and check if it's part of a valid QSO
+                # Parse the message and extract report if present
                 parsed_msg = parse_message(message)
                 if not parsed_msg:
                     non_contributing_count += 1
@@ -89,41 +97,69 @@ def parse_wsjtx_log(file_path, my_call):
 
                 sender = parsed_msg['sender']
                 recipient = parsed_msg['recipient']
-                qso_complete = parsed_msg['qso_complete']
 
-                if my_call in message:
-                    if sender == my_call or recipient == my_call:
-                        # Track conversation between my_call and other station
-                        other_station = recipient if sender == my_call else sender
-
-                        if qso_complete:
-                            # Log valid QSO if we have a complete message
-                            qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
-                            qso_date = qso_datetime.strftime("%Y%m%d")
-                            qso_time = qso_datetime.strftime("%H%M")
-
-                            # Determine band using frequency
-                            band = get_band(frequency)
-
-                            # Add the QSO data to the list
-                            qso_data.append({
-                                'call': other_station,
-                                'band': band,
-                                'freq': freq_mhz,
-                                'mode': mode,
-                                'qso_date': qso_date,
-                                'time_on': qso_time,
-                                'rst_sent': '599',  # Assuming standard report
-                                'rst_rcvd': rst_rcvd.strip(),
-                                'my_grid': 'AA00aa',  # Placeholder for your grid square
-                                'grid': 'unknown',  # No grid data available
-                            })
-                            valid_qso_count += 1
-                        else:
-                            # Track incomplete conversation
-                            ongoing_qsos[other_station] = parsed_msg
-                else:
+                # Only process lines that mention my_call
+                if my_call not in message:
                     non_contributing_count += 1
+                    continue
+
+                if sender == my_call or recipient == my_call:
+                    # Determine the other station's callsign
+                    other_station = recipient if sender == my_call else sender
+
+                    # Initialize QSO state if not already tracked
+                    if other_station not in qso_states:
+                        qso_states[other_station] = {
+                            'state': 'none',  # 'none', 'heard', 'replied', 'complete'
+                            'report_received': None,  # Our report sent to them
+                            'their_report': None,  # Their report to us
+                            'qso_datetime': None,
+                            'qso_time': None,
+                            'freq': None,
+                            'band': None,
+                            'mode': None
+                        }
+
+                    state = qso_states[other_station]
+
+                    # Determine if this is us transmitting or receiving
+                    is_tx = (direction == 'Tx')
+                    has_their_report = parsed_msg['has_report']
+                    our_report = parsed_msg['report'] if is_tx and parsed_msg['report'] else None
+                    their_report = parsed_msg['report'] if not is_tx and parsed_msg['report'] else rst_rcvd
+
+                    # Track our report (when we transmitted with a report)
+                    if is_tx and has_their_report and our_report:
+                        state['report_received'] = our_report
+
+                    # Track their report (when we received a report from them)
+                    if not is_tx and their_report:
+                        state['their_report'] = their_report
+                        if state['qso_datetime'] is None:
+                            qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
+                            state['qso_datetime'] = qso_datetime.strftime("%Y%m%d")
+                            state['qso_time'] = qso_datetime.strftime("%H%M")
+                            state['freq'] = freq_mhz
+                            state['band'] = get_band(frequency)
+                            state['mode'] = mode
+
+                    # QSO is complete when we have both our report sent and their report received
+                    if state['report_received'] and state['their_report'] and state['state'] != 'complete':
+                        state['state'] = 'complete'
+                        qso_data.append({
+                            'call': other_station,
+                            'band': state['band'],
+                            'freq': state['freq'],
+                            'mode': state['mode'],
+                            'qso_date': state['qso_datetime'],
+                            'time_on': state['qso_time'],
+                            'rst_sent': '599',  # Assuming standard report
+                            'rst_rcvd': state['their_report'],
+                            'my_grid': 'AA00aa',  # Placeholder for your grid square
+                            'grid': 'unknown',  # No grid data available
+                        })
+                        valid_qso_count += 1
+
             else:
                 invalid_lines_count += 1
 
