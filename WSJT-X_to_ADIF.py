@@ -78,10 +78,11 @@ def parse_wsjtx_log(file_path, my_call):
                         message_grid = part.upper()
                         break
 
-                # Find RST report (numeric, optional negative)
+                # Find RST report (numeric, optional negative or positive sign)
+                # Examples: -21, +00, -06, R+09
                 report = None
                 for part in parts:
-                    if re.match(r'^-?\d{2,4}$', part):
+                    if re.match(r'^[+-]?\d{2,4}$', part):
                         report = part
                         break
 
@@ -120,7 +121,9 @@ def parse_wsjtx_log(file_path, my_call):
                         'band': None,
                         'mode': None,
                         'their_grid': None,
-                        'our_grid': None
+                        'our_grid': None,
+                        'our_rst_sent': None,
+                        'has_sent_snr': False
                     }
 
                 state = qso_states[other_station]
@@ -130,26 +133,46 @@ def parse_wsjtx_log(file_path, my_call):
                 if is_tx and message_grid:
                     state['our_grid'] = message_grid
 
+                # Track the SNR we transmit to them (RST_SENT)
+                # Message format: THEIRCALL MYCALL [SNR or R-SNR]
+                # The SNR appears as 3rd token (e.g., -21, R+09, R-08)
+                # Initial calls have no SNR: THEIRCALL MYCALL MYGRID
+                if is_tx and len(parts) >= 3:
+                    # Check 3rd token for SNR pattern: optionally R, then +/-, then 2 digits
+                    # Examples: -21, R+09, R-08, R-02
+                    # Initial calls have 3rd token as grid (e.g., JO59), not SNR
+                    third_part = parts[2]
+                    if re.match(r'^[R][+-]\d{2}$', third_part) or re.match(r'^[+-]\d{2}$', third_part):
+                        state['our_rst_sent'] = third_part
+                        state['has_sent_snr'] = True
+
                 # When we receive a message from them with a grid, that's their grid
                 if not is_tx and message_grid and sender == other_station:
                     state['their_grid'] = message_grid
 
-                # Track their report
+                # Track their report (SNR they report about our signal)
+                # Set datetime from their first message to us (when they report our signal)
+                if not is_tx and report and state['qso_datetime'] is None:
+                    qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
+                    state['qso_datetime'] = qso_datetime.strftime("%Y%m%d")
+                    state['qso_time'] = qso_datetime.strftime("%H%M")
+                    state['freq'] = freq_mhz
+                    state['band'] = get_band(frequency)
+                    state['mode'] = mode
+
+                # Track their report (SNR they report about our signal)
                 if not is_tx and report:
                     state['their_report'] = report
-                    if state['qso_datetime'] is None:
-                        qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
-                        state['qso_datetime'] = qso_datetime.strftime("%Y%m%d")
-                        state['qso_time'] = qso_datetime.strftime("%H%M")
-                        state['freq'] = freq_mhz
-                        state['band'] = get_band(frequency)
-                        state['mode'] = mode
 
-                # QSO is complete when we have their report
-                if state['their_report'] and state['state'] != 'complete':
+                # QSO is complete when we have their report AND we have sent at least one SNR
+                # This allows for the typical FT8 exchange where initial call has no SNR
+                # but reply messages do have SNR
+                if state['their_report'] and state['has_sent_snr'] and state['state'] != 'complete':
                     state['state'] = 'complete'
                     # Use their_grid from reply if available, otherwise fallback to seen grid from CQ call
                     their_actual_grid = state['their_grid'] if state['their_grid'] else seen_grids.get(other_station)
+                    our_grid = state['our_grid'] if state['our_grid'] else 'AA00aa'
+                    their_grid = their_actual_grid if their_actual_grid else 'unknown'
                     qso_data.append({
                         'call': other_station,
                         'band': state['band'],
@@ -157,10 +180,10 @@ def parse_wsjtx_log(file_path, my_call):
                         'mode': state['mode'],
                         'qso_date': state['qso_datetime'],
                         'time_on': state['qso_time'],
-                        'rst_sent': '599',
+                        'rst_sent': state['our_rst_sent'],
                         'rst_rcvd': state['their_report'],
-                        'my_grid': state['our_grid'] if state['our_grid'] else 'AA00aa',
-                        'grid': their_actual_grid if their_actual_grid else 'unknown',
+                        'my_grid': our_grid,
+                        'grid': their_grid,
                     })
                     valid_qso_count += 1
 
@@ -174,7 +197,7 @@ def write_adif(qso_data, output_file, my_call):
     global ADIF_HEADER
     ADIF_HEADER = f"""\
 ADIF Export from WSJT-X ALL.TXT for {my_call}
-<EOH>
+<OPERATOR:5>{my_call}<EOH>
 """
     with open(output_file, 'w') as adif_file:
         adif_file.write(ADIF_HEADER)
