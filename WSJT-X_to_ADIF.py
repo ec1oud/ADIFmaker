@@ -175,12 +175,12 @@ def parse_wsjtx_log(file_path, my_call, require_73=False):
                 if not is_tx and report:
                     state['their_report'] = report
 
-                # Track RR73/73 from their messages
-                if not is_tx:
-                    if rr73_seen:
-                        state['rr73_received'] = True
-                    if has_seventythree:
-                        state['seventythree_received'] = True
+                # Track RR73/73 from any message (Tx or Rx)
+                # A QSO is complete when either party sends RR73 or 73
+                if rr73_seen:
+                    state['rr73_received'] = True
+                if has_seventythree:
+                    state['seventythree_received'] = True
 
                 # QSO is complete when we have their report AND we have sent at least one SNR
                 # This allows for the typical FT8 exchange where initial call has no SNR
@@ -244,12 +244,17 @@ ADIF Export from WSJT-X ALL.TXT for {my_call}
 
 # Function to validate callsign format
 def validate_callsign(callsign):
-    # Basic amateur radio callsign regex pattern (allows 2-6 characters)
-    pattern = r'^[A-Z]{1,2}[0-9][A-Z]{0,3}(\/[A-Z0-9]{1,3})?$'
-    if not re.match(pattern, callsign.upper()):
+    # Flexible amateur radio callsign regex pattern
+    # Supports: K1ABC, WA1XYZ, EK/RX3DPK, KB7PWD/P, KB7PWD/QRP
+    # Pattern: (1-2 letters)(digit)(0-3 letters) optionally followed by /suffix
+    # or: (2 letters)/callsign for DXCC operator-prefix format (EK/RX3DPK, VK/AA1AA)
+    # or: (1-2 letters)(digit)(0-3 letters)/suffix for portable/special format (KB7PWD/P, KB7PWD/QRP)
+    pattern1 = r'^[A-Z]{1,2}[0-9][A-Z]{0,3}(\/[A-Z0-9]{1,10})?$'
+    pattern2 = r'^[A-Z]{2}/[A-Z]+[0-9][A-Z]{0,3}(\/[A-Z0-9]{1,10})?$'
+    if not re.match(pattern1, callsign.upper()) and not re.match(pattern2, callsign.upper()):
         print(f"Error: Invalid callsign format '{callsign}'")
-        print("Expected format: 2-6 alphanumeric characters, starting with letters, containing a digit")
-        print("Examples: K1ABC, WA1XYZ, VE2K, KB7PWD")
+        print("Expected format: Callsign with optional suffixes (e.g., KB7PWD, EK/RX3DPK, KB7PWD/P)")
+        print("Examples: K1ABC, WA1XYZ, VE2K, EK/RX3DPK, KB7PWD/P")
         sys.exit(1)
     return callsign.upper()
 
