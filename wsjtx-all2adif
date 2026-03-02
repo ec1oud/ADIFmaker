@@ -48,6 +48,7 @@ def parse_wsjtx_log(file_path, my_call, require_73=False):
         lines = f.readlines()
 
         # Pattern to match QSO lines in the ALL.TXT file
+        # Groups: 1=date, 2=time, 3=freq_mhz, 4=direction, 5=mode, 6=rst_rcvd, 7=pitch_decimal, 8=pitch_hz, 9=message
         qso_pattern = re.compile(r"(\d{6})_(\d{6})\s+([\d.]+)\s+(Rx|Tx)\s+(\w+)\s+(-?\d+)\s+(-?\d+\.\d+)\s+(\d+)\s+(.*)")
 
         # Store grid squares seen in CQ messages (first field is grid for the transmitting station)
@@ -57,8 +58,12 @@ def parse_wsjtx_log(file_path, my_call, require_73=False):
         for line in lines:
             match = qso_pattern.match(line.strip())
             if match:
-                date_str, time_str, freq_mhz, direction, mode, rst_rcvd, _, _, message = match.groups()
+                date_str, time_str, freq_mhz, direction, mode, rst_rcvd, pitch_decimal, pitch_hz, message = match.groups()
                 frequency = float(freq_mhz)
+                # Apply pitch correction for FT2 mode: pitch is in Hz, convert to MHz and add to base frequency
+                if mode == 'FT2' and pitch_hz:
+                    pitch_mhz = float(pitch_hz) / 1000000.0
+                    frequency = frequency + pitch_mhz
 
                 # Extract grid and report from message
                 parts = message.split()
@@ -161,7 +166,8 @@ def parse_wsjtx_log(file_path, my_call, require_73=False):
                     qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
                     state['qso_datetime'] = qso_datetime.strftime("%Y%m%d")
                     state['qso_time'] = qso_datetime.strftime("%H%M")
-                    state['freq'] = freq_mhz
+                    # Format frequency to 6 decimal places to avoid floating-point precision issues
+                    state['freq'] = f"{frequency:.6f}"
                     state['band'] = get_band(frequency)
                     state['mode'] = mode
 
