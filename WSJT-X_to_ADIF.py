@@ -39,34 +39,7 @@ def get_band(frequency):
             return band[0]
     return "unknown"
 
-# Function to parse a QSO message and extract report if present
-def parse_message(message):
-    parts = message.split()
-    if len(parts) < 2:
-        return None
-
-    sender = parts[0]
-    recipient = parts[1] if len(parts) > 1 else ""
-
-    # Look for a report (3-5 characters, typically like 599, 59, -12, etc.)
-    report = None
-    for part in parts[1:]:
-        # Check if it looks like an RST report (numeric, with optional negative sign)
-        if re.match(r'^-?\d{2,4}$', part):
-            report = part
-            break
-
-    # Check for 73 or RR73
-    has_73 = "73" in message or "RR73" in message
-
-    return {
-        'sender': sender,
-        'recipient': recipient,
-        'has_report': report is not None,
-        'report': report,
-        'has_73': has_73,
-        'message': message
-    }
+# Inline grid/report extraction into parse_wsjtx_log for clarity
 
 # Function to extract and parse lines from ALL.TXT that are valid QSOs
 def parse_wsjtx_log(file_path, my_call):
@@ -83,82 +56,113 @@ def parse_wsjtx_log(file_path, my_call):
         # Pattern to match QSO lines in the ALL.TXT file
         qso_pattern = re.compile(r"(\d{6})_(\d{6})\s+([\d.]+)\s+(Rx|Tx)\s+(\w+)\s+(-?\d+)\s+(-?\d+\.\d+)\s+(\d+)\s+(.*)")
 
+        # Store grid squares seen in CQ messages (first field is grid for the transmitting station)
+        # Key: callsign, Value: their grid square (from when they called CQ and I heard it)
+        seen_grids = {}
+
         for line in lines:
             match = qso_pattern.match(line.strip())
             if match:
                 date_str, time_str, freq_mhz, direction, mode, rst_rcvd, _, _, message = match.groups()
                 frequency = float(freq_mhz)
 
-                # Parse the message and extract report if present
-                parsed_msg = parse_message(message)
-                if not parsed_msg:
+                # Extract grid and report from message
+                parts = message.split()
+                sender = parts[0]
+                recipient = parts[1] if len(parts) > 1 else ""
+
+                # Find grid square (Maidenhead format)
+                message_grid = None
+                for part in parts:
+                    if re.match(r'^[A-Z]{2}\d{2}([A-Z0-9]{0,4})?$', part, re.IGNORECASE):
+                        message_grid = part.upper()
+                        break
+
+                # Find RST report (numeric, optional negative)
+                report = None
+                for part in parts:
+                    if re.match(r'^-?\d{2,4}$', part):
+                        report = part
+                        break
+
+                # Determine the other station's callsign and capture grids from CQ calls
+                # Do this BEFORE filtering non-contributing lines to ensure we capture grids from CQ messages
+                other_station = None
+                if sender == 'CQ' and recipient != my_call and message_grid:
+                    # We received a CQ call from another station: "CQ THEIRCALL THEIRGRID"
+                    # Capture their grid even if our callsign is not in the message
+                    other_station = recipient
+                    seen_grids[other_station] = message_grid
+                elif sender == my_call:
+                    # We transmitted to them
+                    other_station = recipient
+                elif recipient == my_call:
+                    # They transmitted to us
+                    other_station = sender
+
+                # Only process lines that mention my_call (unless it's a CQ we just captured)
+                if my_call not in message and other_station is None:
                     non_contributing_count += 1
                     continue
 
-                sender = parsed_msg['sender']
-                recipient = parsed_msg['recipient']
-
-                # Only process lines that mention my_call
-                if my_call not in message:
-                    non_contributing_count += 1
+                if other_station is None or other_station == my_call:
                     continue
 
-                if sender == my_call or recipient == my_call:
-                    # Determine the other station's callsign
-                    other_station = recipient if sender == my_call else sender
+                # Initialize QSO state if not already tracked
+                if other_station not in qso_states:
+                    qso_states[other_station] = {
+                        'state': 'none',
+                        'report_received': None,
+                        'their_report': None,
+                        'qso_datetime': None,
+                        'qso_time': None,
+                        'freq': None,
+                        'band': None,
+                        'mode': None,
+                        'their_grid': None,
+                        'our_grid': None
+                    }
 
-                    # Initialize QSO state if not already tracked
-                    if other_station not in qso_states:
-                        qso_states[other_station] = {
-                            'state': 'none',  # 'none', 'heard', 'replied', 'complete'
-                            'report_received': None,  # Our report sent to them
-                            'their_report': None,  # Their report to us
-                            'qso_datetime': None,
-                            'qso_time': None,
-                            'freq': None,
-                            'band': None,
-                            'mode': None
-                        }
+                state = qso_states[other_station]
+                is_tx = (direction == 'Tx')
 
-                    state = qso_states[other_station]
+                # When we transmit and include a grid, that's our grid
+                if is_tx and message_grid:
+                    state['our_grid'] = message_grid
 
-                    # Determine if this is us transmitting or receiving
-                    is_tx = (direction == 'Tx')
-                    has_their_report = parsed_msg['has_report']
-                    our_report = parsed_msg['report'] if is_tx and parsed_msg['report'] else None
-                    their_report = parsed_msg['report'] if not is_tx and parsed_msg['report'] else rst_rcvd
+                # When we receive a message from them with a grid, that's their grid
+                if not is_tx and message_grid and sender == other_station:
+                    state['their_grid'] = message_grid
 
-                    # Track our report (when we transmitted with a report)
-                    if is_tx and has_their_report and our_report:
-                        state['report_received'] = our_report
+                # Track their report
+                if not is_tx and report:
+                    state['their_report'] = report
+                    if state['qso_datetime'] is None:
+                        qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
+                        state['qso_datetime'] = qso_datetime.strftime("%Y%m%d")
+                        state['qso_time'] = qso_datetime.strftime("%H%M")
+                        state['freq'] = freq_mhz
+                        state['band'] = get_band(frequency)
+                        state['mode'] = mode
 
-                    # Track their report (when we received a report from them)
-                    if not is_tx and their_report:
-                        state['their_report'] = their_report
-                        if state['qso_datetime'] is None:
-                            qso_datetime = datetime.strptime(date_str + time_str, "%y%m%d%H%M%S")
-                            state['qso_datetime'] = qso_datetime.strftime("%Y%m%d")
-                            state['qso_time'] = qso_datetime.strftime("%H%M")
-                            state['freq'] = freq_mhz
-                            state['band'] = get_band(frequency)
-                            state['mode'] = mode
-
-                    # QSO is complete when we have both our report sent and their report received
-                    if state['report_received'] and state['their_report'] and state['state'] != 'complete':
-                        state['state'] = 'complete'
-                        qso_data.append({
-                            'call': other_station,
-                            'band': state['band'],
-                            'freq': state['freq'],
-                            'mode': state['mode'],
-                            'qso_date': state['qso_datetime'],
-                            'time_on': state['qso_time'],
-                            'rst_sent': '599',  # Assuming standard report
-                            'rst_rcvd': state['their_report'],
-                            'my_grid': 'AA00aa',  # Placeholder for your grid square
-                            'grid': 'unknown',  # No grid data available
-                        })
-                        valid_qso_count += 1
+                # QSO is complete when we have their report
+                if state['their_report'] and state['state'] != 'complete':
+                    state['state'] = 'complete'
+                    # Use their_grid from reply if available, otherwise fallback to seen grid from CQ call
+                    their_actual_grid = state['their_grid'] if state['their_grid'] else seen_grids.get(other_station)
+                    qso_data.append({
+                        'call': other_station,
+                        'band': state['band'],
+                        'freq': state['freq'],
+                        'mode': state['mode'],
+                        'qso_date': state['qso_datetime'],
+                        'time_on': state['qso_time'],
+                        'rst_sent': '599',
+                        'rst_rcvd': state['their_report'],
+                        'my_grid': state['our_grid'] if state['our_grid'] else 'AA00aa',
+                        'grid': their_actual_grid if their_actual_grid else 'unknown',
+                    })
+                    valid_qso_count += 1
 
             else:
                 invalid_lines_count += 1
@@ -199,6 +203,14 @@ def validate_callsign(callsign):
         print("Examples: K1ABC, WA1XYZ, VE2K")
         sys.exit(1)
     return callsign.upper()
+
+# Function to validate grid square format
+def validate_grid(grid):
+    # Maidenhead grid square: 2-6 characters, pattern AA00, AA00aa, AA00aa11
+    pattern = r'^[A-Z]{2}\d{2}([A-Z0-9]{0,4})?$'
+    if not re.match(pattern, grid.upper()):
+        return False
+    return True
 
 # Main logic to parse the ALL.TXT and write to ADIF
 def main():
