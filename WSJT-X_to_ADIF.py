@@ -42,7 +42,7 @@ def get_band(frequency):
 # Inline grid/report extraction into parse_wsjtx_log for clarity
 
 # Function to extract and parse lines from ALL.TXT that are valid QSOs
-def parse_wsjtx_log(file_path, my_call):
+def parse_wsjtx_log(file_path, my_call, require_73=False):
     qso_data = []
     # Track QSO states: {callsign: {'state': 'heard'|'replied'|'complete', 'report': str, 'datetime': str, 'time': str, 'freq': str, 'band': str, 'mode': str}}
     qso_states = {}
@@ -86,6 +86,15 @@ def parse_wsjtx_log(file_path, my_call):
                         report = part
                         break
 
+                # Check for RR73 or 73 in message (for QSO completion logic)
+                rr73_seen = False
+                has_seventythree = False
+                for part in parts:
+                    if part == 'RR73':
+                        rr73_seen = True
+                    if part == '73':
+                        has_seventythree = True
+
                 # Determine the other station's callsign and capture grids from CQ calls
                 # Do this BEFORE filtering non-contributing lines to ensure we capture grids from CQ messages
                 other_station = None
@@ -123,8 +132,10 @@ def parse_wsjtx_log(file_path, my_call):
                         'their_grid': None,
                         'our_grid': None,
                         'our_rst_sent': None,
-                        'has_sent_snr': False
-                    }
+                                'has_sent_snr': False,
+                                'rr73_received': False,
+                                'seventythree_received': False
+                            }
 
                 state = qso_states[other_station]
                 is_tx = (direction == 'Tx')
@@ -164,10 +175,24 @@ def parse_wsjtx_log(file_path, my_call):
                 if not is_tx and report:
                     state['their_report'] = report
 
+                # Track RR73/73 from their messages
+                if not is_tx:
+                    if rr73_seen:
+                        state['rr73_received'] = True
+                    if has_seventythree:
+                        state['seventythree_received'] = True
+
                 # QSO is complete when we have their report AND we have sent at least one SNR
                 # This allows for the typical FT8 exchange where initial call has no SNR
                 # but reply messages do have SNR
-                if state['their_report'] and state['has_sent_snr'] and state['state'] != 'complete':
+                has_qso_complete_conditions = state['their_report'] and state['has_sent_snr']
+                if require_73:
+                    # Strict mode: require both RR73 and 73 in the exchange
+                    qso_complete = has_qso_complete_conditions and state['rr73_received'] and state['seventythree_received']
+                else:
+                    # Lenient mode: complete after RR73 (common case when other station doesn't reply with 73)
+                    qso_complete = has_qso_complete_conditions and state['rr73_received']
+                if qso_complete and state['state'] != 'complete':
                     state['state'] = 'complete'
                     # Use their_grid from reply if available, otherwise fallback to seen grid from CQ call
                     their_actual_grid = state['their_grid'] if state['their_grid'] else seen_grids.get(other_station)
@@ -195,9 +220,10 @@ def parse_wsjtx_log(file_path, my_call):
 # Function to write the ADIF file
 def write_adif(qso_data, output_file, my_call):
     global ADIF_HEADER
+    operator_field_len = len(my_call)
     ADIF_HEADER = f"""\
 ADIF Export from WSJT-X ALL.TXT for {my_call}
-<OPERATOR:5>{my_call}<EOH>
+<OPERATOR:{operator_field_len}>{my_call}<EOH>
 """
     with open(output_file, 'w') as adif_file:
         adif_file.write(ADIF_HEADER)
@@ -218,12 +244,12 @@ ADIF Export from WSJT-X ALL.TXT for {my_call}
 
 # Function to validate callsign format
 def validate_callsign(callsign):
-    # Basic amateur radio callsign regex pattern
-    pattern = r'^[A-Z]{1,2}[0-9][A-Z]{0,2}(\/[A-Z0-9]{1,3})?$'
+    # Basic amateur radio callsign regex pattern (allows 2-6 characters)
+    pattern = r'^[A-Z]{1,2}[0-9][A-Z]{0,3}(\/[A-Z0-9]{1,3})?$'
     if not re.match(pattern, callsign.upper()):
         print(f"Error: Invalid callsign format '{callsign}'")
-        print("Expected format: 2-5 alphanumeric characters, starting with letters, containing a digit")
-        print("Examples: K1ABC, WA1XYZ, VE2K")
+        print("Expected format: 2-6 alphanumeric characters, starting with letters, containing a digit")
+        print("Examples: K1ABC, WA1XYZ, VE2K, KB7PWD")
         sys.exit(1)
     return callsign.upper()
 
@@ -261,6 +287,13 @@ def main():
         help='Output ADIF file name (default: output_log.adi)'
     )
 
+    parser.add_argument(
+        '--require-73',
+        action='store_true',
+        default=False,
+        help='Require both RR73 and 73 in the exchange before considering QSO complete (strict mode). Without this flag, QSO is complete after RR73 (lenient mode).'
+    )
+
     args = parser.parse_args()
 
     # Validate callsign
@@ -273,7 +306,7 @@ def main():
         sys.exit(1)
 
     qso_data, valid_qso_count, non_contributing_count, invalid_lines_count = \
-        parse_wsjtx_log(args.all_txt_path, my_call)
+        parse_wsjtx_log(args.all_txt_path, my_call, args.require_73)
 
     write_adif(qso_data, args.output, my_call)
 
@@ -281,6 +314,7 @@ def main():
     print(f"Valid QSOs logged: {valid_qso_count}")
     print(f"Non-contributing lines: {non_contributing_count}")
     print(f"Invalid lines (not matching regex): {invalid_lines_count}")
+    print(f"QSO completion mode: {'Strict (requires 73)' if args.require_73 else 'Lenient (after RR73)'}")
 
 if __name__ == "__main__":
     main()
