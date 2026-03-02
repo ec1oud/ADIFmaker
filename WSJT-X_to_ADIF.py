@@ -29,7 +29,7 @@ ADIF Export from WSJT-X ALL.TXT
 """
 
 ADIF_QSO_TEMPLATE = """\
-<CALL:{call_len}>{call}<BAND:{band_len}>{band}<FREQ:{freq_len}>{freq}<MODE:{mode_len}>{mode}<QSO_DATE:{qso_date_len}>{qso_date}<TIME_ON:{time_on_len}>{time_on}<RST_SENT:{rst_len}>{rst_sent}<RST_RCVD:{rst_len}>{rst_rcvd}<MY_GRIDSQUARE:{my_grid_len}>{my_grid}<GRIDSQUARE:{grid_len}>{grid}<EOR>
+<OPERATOR:{operator_len}>{operator}<CALL:{call_len}>{call}<BAND:{band_len}>{band}<FREQ:{freq_len}>{freq}<MODE:{mode_len}>{mode}<QSO_DATE:{qso_date_len}>{qso_date}<TIME_ON:{time_on_len}>{time_on}<RST_SENT:{rst_len}>{rst_sent}<RST_RCVD:{rst_len}>{rst_rcvd}<MY_GRIDSQUARE:{my_grid_len}>{my_grid}<GRIDSQUARE:{grid_len}>{grid}<EOR>
 """
 
 # Function to get band based on frequency
@@ -223,13 +223,14 @@ def write_adif(qso_data, output_file, my_call):
     operator_field_len = len(my_call)
     ADIF_HEADER = f"""\
 ADIF Export from WSJT-X ALL.TXT for {my_call}
-<OPERATOR:{operator_field_len}>{my_call}<EOH>
+<EOH>
 """
     with open(output_file, 'w') as adif_file:
         adif_file.write(ADIF_HEADER)
 
         for qso in qso_data:
             adif_qso = ADIF_QSO_TEMPLATE.format(
+                operator=my_call, operator_len=len(my_call),
                 call=qso['call'], call_len=len(qso['call']),
                 band=qso['band'], band_len=len(qso['band']),
                 freq=qso['freq'], freq_len=len(qso['freq']),
